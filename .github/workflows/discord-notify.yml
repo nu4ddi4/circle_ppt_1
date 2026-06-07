@@ -19,7 +19,6 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
-          ACTOR_ID: ${{ github.actor_id }}
           REF: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           HEAD_URL: ${{ github.event.head_commit.url }}
@@ -41,23 +40,26 @@ jobs:
             exit 0
           fi
 
-          COMMIT_COUNT=$(echo "$COMMITS_JSON" | jq -r 'length' 2>/dev/null || echo 0)
+          COUNT=$(echo "$COMMITS_JSON" | jq -r 'length' 2>/dev/null || echo 0)
           COMMITS_DETAIL=""
-          if [ "$COMMIT_COUNT" -gt 0 ]; then
+          if [ "$COUNT" -gt 0 ]; then
             MAX_SHOW=3
-            for i in $(seq 0 $((COMMIT_COUNT-1))); do
-              [ $i -ge $MAX_SHOW ] && break
-              C_MSG=$(echo "$COMMITS_JSON" | jq -r ".[$i].message" 2>/dev/null | head -n1)
-              C_AUTHOR=$(echo "$COMMITS_JSON" | jq -r ".[$i].author.name" 2>/dev/null)
-              C_SHA=$(echo "$COMMITS_JSON" | jq -r ".[$i].id" 2>/dev/null | cut -c1-7)
-              C_URL=$(echo "$COMMITS_JSON" | jq -r ".[$i].url" 2>/dev/null)
+            shown=0
+            for idx in $(seq 0 $((COUNT-1))); do
+              [ $shown -ge $MAX_SHOW ] && break
+              C_MSG=$(echo "$COMMITS_JSON" | jq -r ".[$idx].message" 2>/dev/null | head -n1)
+              C_AUTHOR=$(echo "$COMMITS_JSON" | jq -r ".[$idx].author.name" 2>/dev/null)
+              commit_id=$(echo "$COMMITS_JSON" | jq -r ".[$idx].id" 2>/dev/null)
+              C_SHA=${commit_id::7}
+              C_URL=$(echo "$COMMITS_JSON" | jq -r ".[$idx].url" 2>/dev/null)
               if [ -z "$C_URL" ] || [ "$C_URL" = "null" ]; then
-                C_URL="https://github.com/$REPO/commit/$(echo "$COMMITS_JSON" | jq -r ".[$i].id" 2>/dev/null)"
+                C_URL="https://github.com/$REPO/commit/$commit_id"
               fi
               COMMITS_DETAIL="${COMMITS_DETAIL}[`${C_SHA}`](${C_URL}) ${C_AUTHOR}: ${C_MSG}\n"
+              shown=$((shown+1))
             done
-            if [ "$COMMIT_COUNT" -gt $MAX_SHOW ]; then
-              COMMITS_DETAIL="${COMMITS_DETAIL}\n... 외 ${COMMIT_COUNT}개 커밋\n"
+            if [ "$COUNT" -gt $MAX_SHOW ]; then
+              COMMITS_DETAIL="${COMMITS_DETAIL}\n... 외 ${COUNT}개 커밋\n"
             fi
           fi
 
@@ -74,13 +76,13 @@ jobs:
             COLOR=3066993
             TITLE="[${REPO}] 🚀 Push → ${REF}"
             DESC="${COMMITS_DETAIL}"
-            if [ "$COMMIT_COUNT" -gt 0 ]; then
-              DESC="${DESC}\n📊 총 **${COMMIT_COUNT}개** 커밋"
+            if [ "$COUNT" -gt 0 ]; then
+              DESC="${DESC}\n📊 총 **${COUNT}개** 커밋"
             fi
             [ -z "$URL" ] && URL="$HEAD_URL"
             FIELDS=$(printf '{"name":"브랜치","value":"`%s`","inline":true}' "$REF")
             FIELDS="${FIELDS},$(printf '{"name":"푸시한 사람","value":"%s","inline":true}' "$ACTOR")"
-            FIELDS="${FIELDS},$(printf '{"name":"SHA","value":"[\`%s\`](%s)","inline":false}' "$SHA" "$URL")"
+            FIELDS="${FIELDS},$(printf '{"name":"SHA","value":"[\\`%s\\`](%s)","inline":false}' "$SHA" "$URL")"
             FOOTER="${FOOTER} • push"
 
           elif [ "$EVENT" = "pull_request" ]; then
@@ -133,7 +135,15 @@ jobs:
             FOOTER="${FOOTER} • ${EVENT}"
           fi
 
-          PAYLOAD=$(jq -n             --arg title "$TITLE"             --arg url "$URL"             --arg desc "$DESC"             --argjson color "$COLOR"             --arg footer "$FOOTER"             --arg ts "$TIMESTAMP"             --argjson fields "$(echo "[$FIELDS]" | jq '.')"             '{
+          PAYLOAD=$(jq -n \
+            --arg title "$TITLE" \
+            --arg url "$URL" \
+            --arg desc "$DESC" \
+            --argjson color "$COLOR" \
+            --arg footer "$FOOTER" \
+            --arg ts "$TIMESTAMP" \
+            --argjson fields "$(printf '[%s]' "$FIELDS")" \
+            '{
               embeds: [{
                 title: $title,
                 url: $url,
