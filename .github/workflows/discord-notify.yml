@@ -29,9 +29,6 @@ jobs:
           ACTION: ${{ github.event.action }}
           COMMITS_JSON: ${{ toJson(github.event.commits) }}
           COMPARE: ${{ github.event.compare }}
-          REPO_URL: ${{ github.event.repository.html_url }}
-          REPO_DESC: ${{ github.event.repository.description }}
-          REPO_LANG: ${{ github.event.repository.language }}
         run: |
           set -e
           WEBHOOK="$WEBHOOK"
@@ -41,77 +38,74 @@ jobs:
           fi
 
           COUNT=$(echo "$COMMITS_JSON" | jq -r 'length' 2>/dev/null || echo 0)
-          COMMITS_DETAIL=""
+          COMMITS_DESC=""
           if [ "$COUNT" -gt 0 ]; then
             MAX_SHOW=3
             shown=0
             for idx in $(seq 0 $((COUNT-1))); do
               [ $shown -ge $MAX_SHOW ] && break
-              C_MSG=$(echo "$COMMITS_JSON" | jq -r ".[$idx].message" 2>/dev/null | head -n1)
-              C_AUTHOR=$(echo "$COMMITS_JSON" | jq -r ".[$idx].author.name" 2>/dev/null)
-              commit_id=$(echo "$COMMITS_JSON" | jq -r ".[$idx].id" 2>/dev/null)
-              C_SHA=${commit_id::7}
-              C_URL=$(echo "$COMMITS_JSON" | jq -r ".[$idx].url" 2>/dev/null)
-              if [ -z "$C_URL" ] || [ "$C_URL" = "null" ]; then
-                C_URL="https://github.com/$REPO/commit/$commit_id"
+              msg=$(echo "$COMMITS_JSON" | jq -r ".[$idx].message" 2>/dev/null | head -n1 || true)
+              commit_id=$(echo "$COMMITS_JSON" | jq -r ".[$idx].id" 2>/dev/null || true)
+              short_sha=${commit_id::7}
+              commit_url=$(echo "$COMMITS_JSON" | jq -r ".[$idx].url" 2>/dev/null || true)
+              if [ -z "$commit_url" ] || [ "$commit_url" = "null" ]; then
+                commit_url="https://github.com/$REPO/commit/$commit_id"
               fi
-              COMMITS_DETAIL="${COMMITS_DETAIL}[`${C_SHA}`](${C_URL}) ${C_AUTHOR}: ${C_MSG}\n"
+              COMMITS_DESC="${COMMITS_DESC}[$short_sha]($commit_url) $msg\n"
               shown=$((shown+1))
             done
             if [ "$COUNT" -gt $MAX_SHOW ]; then
-              COMMITS_DETAIL="${COMMITS_DETAIL}\n... 외 ${COUNT}개 커밋\n"
+              COMMITS_DESC="${COMMITS_DESC}\n... 외 ${COUNT}개 커밋\n"
             fi
           fi
-
-          FOOTER="GitHub • ${REPO}"
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           COLOR=0
           URL="$COMPARE"
           TITLE=""
           DESC=""
-          FIELDS=""
+          FIELDS_JSON="[]"
 
           if [ "$EVENT" = "push" ]; then
             COLOR=3066993
             TITLE="[${REPO}] 🚀 Push → ${REF}"
-            DESC="${COMMITS_DETAIL}"
+            DESC="$COMMITS_DESC"
             if [ "$COUNT" -gt 0 ]; then
-              DESC="${DESC}\n📊 총 **${COUNT}개** 커밋"
+              DESC="${DESC}\n총 ${COUNT}개 커밋"
             fi
             [ -z "$URL" ] && URL="$HEAD_URL"
-            FIELDS=$(printf '{"name":"브랜치","value":"`%s`","inline":true}' "$REF")
-            FIELDS="${FIELDS},$(printf '{"name":"푸시한 사람","value":"%s","inline":true}' "$ACTOR")"
-            FIELDS="${FIELDS},$(printf '{"name":"SHA","value":"[\\`%s\\`](%s)","inline":false}' "$SHA" "$URL")"
-            FOOTER="${FOOTER} • push"
+            FIELDS_JSON=$(jq -n \
+              --arg branch "$REF" \
+              --arg actor "$ACTOR" \
+              --arg sha "$SHA" \
+              --arg sha_url "$URL" \
+              '[{name: "브랜치", value: $branch, inline: true}, {name: "푸시한 사람", value: $actor, inline: true}, {name: "SHA", value: ("[" + $sha + "](" + $sha_url + ")"), inline: false}]')
 
           elif [ "$EVENT" = "pull_request" ]; then
             MERGED="${{ github.event.pull_request.merged }}"
             if [ "$MERGED" = "true" ]; then
               COLOR=15844367
               TITLE="[${REPO}] ✅ PR Merged #${PR_NUM}"
-              DESC="**${TITLE}**\n\n$ACTOR 님이 PR을 머지했습니다.\n\n**제목:** ${TITLE}\n**헤드 브랜치:** ${REF}"
-              FOOTER="${FOOTER} • merged"
+              DESC="**머지됨**\n$ACTOR 님이 PR을 머지했습니다.\n\n제목: $TITLE\n헤드 브랜치: ${REF}"
             elif [ "$ACTION" = "opened" ] || [ "$ACTION" = "reopened" ]; then
               COLOR=3447003
               TITLE="[${REPO}] 🔀 PR Opened #${PR_NUM}"
-              DESC="**${TITLE}**\n\n$ACTOR 님이 PR을 열었습니다.\n\n**제목:** ${TITLE}\n**헤드 브랜치:** ${REF}"
-              FOOTER="${FOOTER} • pull_request"
+              DESC="**열림**\n$ACTOR 님이 PR을 열었습니다.\n\n제목: $TITLE\n헤드 브랜치: ${REF}"
             elif [ "$ACTION" = "closed" ]; then
               COLOR=10038562
               TITLE="[${REPO}] ❌ PR Closed #${PR_NUM}"
-              DESC="**${TITLE}**\n\n$ACTOR 님이 PR을 닫았습니다.\n\n**제목:** ${TITLE}\n**헤드 브랜치:** ${REF}"
-              FOOTER="${FOOTER} • pull_request"
+              DESC="**닫힘**\n$ACTOR 님이 PR을 닫았습니다.\n\n제목: $TITLE\n헤드 브랜치: ${REF}"
             else
               COLOR=3447003
-              TITLE="[${REPO}] 🔀 PR #${PR_NUM} ${ACTION}"
-              DESC="$ACTION\n\n**제목:** ${TITLE}\n**헤드 브랜치:** ${REF}"
-              FOOTER="${FOOTER} • pull_request"
+              TITLE="[${REPO}] 🔀 PR #${PR_NUM} $ACTION"
+              DESC="$ACTION\n\n제목: $TITLE\n헤드 브랜치: ${REF}"
             fi
             URL="https://github.com/${REPO}/pull/${PR_NUM}"
-            FIELDS=$(printf '{"name":"PR 번호","value":"[#%s](%s)","inline":true}' "$PR_NUM" "$URL")
-            FIELDS="${FIELDS},$(printf '{"name":"작성자","value":"%s","inline":true}' "$ACTOR")"
-            FIELDS="${FIELDS},$(printf '{"name":"헤드 브랜치","value":"`%s`","inline":true}' "$REF")"
+            FIELDS_JSON=$(jq -n \
+              --arg pr "$PR_NUM" \
+              --arg pr_url "$URL" \
+              --arg actor "$ACTOR" \
+              --arg branch "$REF" \
+              '[{name: "PR 번호", value: ("#" + $pr + " " + $pr_url), inline: true}, {name: "작성자", value: $actor, inline: true}, {name: "헤드 브랜치", value: $branch, inline: true}]')
 
           elif [ "$EVENT" = "issues" ]; then
             COLOR=10038562
@@ -120,19 +114,20 @@ jobs:
             elif [ "$ACTION" = "closed" ]; then
               TITLE="[${REPO}] 🔒 Issue Closed #${ISSUE_NUM}"
             else
-              TITLE="[${REPO}] 🎫 Issue #${ISSUE_NUM} ${ACTION}"
+              TITLE="[${REPO}] 🎫 Issue #${ISSUE_NUM} $ACTION"
             fi
-            DESC="$ACTOR ${ACTION} issue: **${ISSUE_TITLE}**\n\n이슈 번호: #${ISSUE_NUM}"
+            DESC="$ACTOR $ACTION issue: ${ISSUE_TITLE}\n\n이슈 번호: #${ISSUE_NUM}"
             URL="https://github.com/${REPO}/issues/${ISSUE_NUM}"
-            FIELDS=$(printf '{"name":"이슈 번호","value":"[#%s](%s)","inline":true}' "$ISSUE_NUM" "$URL")
-            FIELDS="${FIELDS},$(printf '{"name":"작성자","value":"%s","inline":true}' "$ACTOR")"
-            FIELDS="${FIELDS},$(printf '{"name":"상태","value":"%s","inline":true}' "$ACTION")"
-            FOOTER="${FOOTER} • issues"
+            FIELDS_JSON=$(jq -n \
+              --arg issue "$ISSUE_NUM" \
+              --arg issue_url "$URL" \
+              --arg actor "$ACTOR" \
+              --arg action "$ACTION" \
+              '[{name: "이슈 번호", value: ("#" + $issue + " " + $issue_url), inline: true}, {name: "작성자", value: $actor, inline: true}, {name: "상태", value: $action, inline: true}]')
 
           else
             TITLE="[${REPO}] 📢 Event: ${EVENT}"
             DESC="$ACTOR triggered ${EVENT}"
-            FOOTER="${FOOTER} • ${EVENT}"
           fi
 
           PAYLOAD=$(jq -n \
@@ -140,9 +135,9 @@ jobs:
             --arg url "$URL" \
             --arg desc "$DESC" \
             --argjson color "$COLOR" \
-            --arg footer "$FOOTER" \
-            --arg ts "$TIMESTAMP" \
-            --argjson fields "$(printf '[%s]' "$FIELDS")" \
+            --arg footer "GitHub • ${REPO}" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson fields "$FIELDS_JSON" \
             '{
               embeds: [{
                 title: $title,
